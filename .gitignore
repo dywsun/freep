@@ -1,0 +1,9 @@
+.local/
+__pycache__/
+*.pyc
+.venv/
+*.db
+*.db-wal
+*.db-shm
+*.pem
+*.key
