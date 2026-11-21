@@ -119,6 +119,14 @@ CentOS 7/8 通过独立 yum 配置使用 CentOS Vault/EPEL 归档，不覆盖现
 - 所有客户端必须按具体版本验证。订阅转换并不意味着所有客户端支持全部协议。
 - 管理操作有只记录动作、不含凭据的审计日志，可登录后请求 `/api/audit`。
 
+## 二维码分享
+
+订阅管理提供每种客户端格式的“订阅二维码”；用户详情的“节点二维码”可以选择单个获准使用的协议。支持显示二维码、复制原始链接、下载 PNG。
+
+二维码使用随网站打包的 qrcode-generator 2.0.4，在浏览器 Canvas 本地生成，不访问第三方二维码 API 或 CDN。单节点链接复用服务端订阅生成逻辑，经管理员登录后获取，只返回当前有效用户、已启用入口的独立凭据。订阅二维码编码的是订阅 URL，单节点二维码编码的是 vmess://、tuic:// 等分享 URI；客户端能否扫码导入取决于它对相应格式和协议的支持。
+
+二维码包含访问凭据，请只发给对应用户。重置订阅令牌使旧订阅二维码失效；若要让已下载的节点或单节点二维码失效，还需重置相应协议凭据。静态前端的二维码仅供演示，不能连接真实节点。
+
 ## 配置应用和权限
 
 HTTP 服务运行身份为 `relay-panel`，只能通过 sudo 调用 root 所有、固定路径的 `backend/apply.py`。辅助程序再次验证协议、端口、凭据、用户数量，使用固定证书与配置路径，不能传任意命令或文件路径。
@@ -161,6 +169,8 @@ python3 scripts/dev.py
 python3 -m unittest discover -s tests -v
 node --check frontend/app.js
 node --check frontend/live.js
+node --check frontend/share.js
+node tests/test_qr.cjs
 bash -n install.sh scripts/build-sing-box.sh
 ```
 

@@ -200,11 +200,22 @@ class Handler(BaseHTTPRequestHandler):
                 if not session: return self.respond(401, {'error': '请先登录'})
                 if path == '/api/session': return self.respond(200, {'csrf': session[1]})
                 if path == '/api/state': return self.respond(200, store.public_state())
+                if path == '/api/share':
+                    uid = parse_qs(url.query).get('id', [''])[0]
+                    with store.lock:
+                        state = store.load(); usage = store.totals(monthly=True)
+                        user = next((u for u in state['users'] if u['id'] == uid), None)
+                        if not user: return self.respond(404, {'error':'用户不存在'})
+                        if not eligible(user, usage): return self.respond(400, {'error':'此用户当前不可用'})
+                        content, _ = subscription(state, user, store.settings, 'uri', usage)
+                        reverse = {kind:name for name,kind in KINDS.items()}
+                        nodes = [{'protocol':reverse[urlsplit(uri).scheme], 'uri':uri} for uri in base64.b64decode(content).decode().splitlines()]
+                        return self.respond(200, {'id':uid, 'nodes':nodes})
                 if path == '/api/audit':
                     with store.lock: rows = store.db.execute('SELECT ts,action FROM audit ORDER BY ts DESC LIMIT 100').fetchall()
                     return self.respond(200, rows)
                 return self.respond(404, {'error': '接口不存在'})
-            allowed = {'/': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css', '/live.js': 'live.js'}
+            allowed = {'/': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css', '/live.js': 'live.js', '/share.js': 'share.js', '/vendor/qrcode.js': 'vendor/qrcode.js'}
             if path not in allowed: return self.respond(404, b'Not found', kind='text/plain')
             file = ROOT / 'frontend' / allowed[path]
             kind = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8'}[file.suffix]

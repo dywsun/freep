@@ -103,6 +103,7 @@ class HttpTests(CoreTests):
             conn.request(method,path,json.dumps(payload) if payload is not None else None,h)
             r=conn.getresponse();body=r.read();return r,body
         r,_=req('GET','/api/state');self.assertEqual(r.status,401)
+        r,_=req('GET','/api/share?id=unknown');self.assertEqual(r.status,401)
         r,_=req('POST','/api/login',{'username':'admin','password':'bad-password-123'});self.assertEqual(r.status,401)
         r,body=req('POST','/api/login',{'username':'admin','password':'test-password-123'})
         self.assertEqual(r.status,200);cookie=r.getheader('Set-Cookie').split(';')[0];csrf=json.loads(body)['csrf']
@@ -112,6 +113,13 @@ class HttpTests(CoreTests):
         r,body=req('POST','/api/action',{'action':'user-create','revision':0,'name':'HTTP test','quota':100,'expire':'2099-12-31','protocols':['VMess','TUIC v5']},headers)
         self.assertEqual(r.status,200,body);u=json.loads(body)['users'][0]
         r,body=req('GET','/sub/'+u['token']+'?format=singbox');self.assertEqual(r.status,200,body);self.assertIn(u['credentials']['VMess']['uuid'],body.decode())
+        r,body=req('GET','/api/share?id='+u['id'],headers=headers)
+        self.assertEqual(r.status,200,body);nodes=json.loads(body)['nodes']
+        self.assertEqual({n['protocol'] for n in nodes},{'VMess','TUIC v5'})
+        vmess=next(n['uri'] for n in nodes if n['protocol']=='VMess')
+        self.assertEqual(json.loads(base64.b64decode(vmess[8:]))['id'],u['credentials']['VMess']['uuid'])
+        self.assertIn(u['credentials']['TUIC v5']['uuid'],next(n['uri'] for n in nodes if n['protocol']=='TUIC v5'))
+        r,_=req('GET','/api/share?id=unknown',headers=headers);self.assertEqual(r.status,404)
         r,_=req('GET','/sub/not-a-token');self.assertEqual(r.status,404)
         r,_=req('POST','/api/logout',{},headers);self.assertEqual(r.status,200)
         r,_=req('GET','/api/state',headers=headers);self.assertEqual(r.status,401)
@@ -132,7 +140,7 @@ class PrefixTests(CoreTests):
             r,_=request('GET',path);self.assertEqual(r.status,404,path)
         r,_=request('GET',prefix);self.assertEqual(r.status,308);self.assertEqual(r.getheader('Location'),prefix+'/')
         r,body=request('GET',prefix+'/');self.assertEqual(r.status,200);self.assertIn(b'window.RELAY_BASE_PATH="/freedom-network"',body)
-        for asset in ['app.js','live.js','style.css']:
+        for asset in ['app.js','live.js','style.css','share.js','vendor/qrcode.js']:
             r,_=request('GET',prefix+'/'+asset);self.assertEqual(r.status,200)
         r,body=request('POST',prefix+'/api/login',{'username':'admin','password':'test-password-123'})
         self.assertEqual(r.status,200,body);self.assertIn('Path=/freedom-network/;',r.getheader('Set-Cookie'))
@@ -143,6 +151,13 @@ class PrefixTests(CoreTests):
         self.assertTrue(u['subscription'].startswith(origin+prefix+'/sub/'))
         r,_=request('GET',prefix+'/sub/'+u['token']+'?format=uri');self.assertEqual(r.status,200)
         r,_=request('GET','/sub/'+u['token']+'?format=uri');self.assertEqual(r.status,404)
+        r,body=request('GET',prefix+'/api/share?id='+u['id'],headers=headers)
+        self.assertEqual(r.status,200,body);self.assertEqual(len(json.loads(body)['nodes']),1)
+        r,_=request('GET','/api/share?id='+u['id'],headers=headers);self.assertEqual(r.status,404)
+        state=self.store.load()
+        self.store.mutate('user-update',{'revision':state['revision'],'id':u['id'],'active':False})
+        r,_=request('GET',prefix+'/api/share?id='+u['id'],headers=headers);self.assertEqual(r.status,400)
+
         r,_=request('POST',prefix+'/api/logout',{},headers);self.assertEqual(r.status,200);self.assertIn('Path=/freedom-network/;',r.getheader('Set-Cookie'))
 
 if __name__=='__main__':unittest.main()
