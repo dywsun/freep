@@ -185,3 +185,9 @@ bash -n install.sh scripts/build-sing-box.sh
 本地已使用官方 1.14.4 源码构建统计内核，完成 VMess/TUIC 双用户的 TCP + UDP 回环实测和四组用户/协议独立上下行计数验证。`scripts/smoke_protocols.py` 可复现（需 requirements 与 SING_BOX_BIN）。五种协议服务端与 sing-box 客户端配置均经真实内核 check。Ubuntu/CentOS 的包管理、Nginx/SELinux/systemd 整机部署仍需在对应干净 VPS 验收；macOS 本机测试不能替代该步骤。
 
 网站自动证书机制依据 [acme.sh 文档](https://github.com/acmesh-official/acme.sh) 和 [Let’s Encrypt HTTP-01 说明](https://letsencrypt.org/docs/challenge-types/)。Cloudflare 代理端口见 [官方端口列表](https://developers.cloudflare.com/fundamentals/reference/network-ports/)。
+
+## 安装中断：内核下载后出现 curl 404
+
+早期安装器错误引用了不存在的独立校验文件。当前已改为读取 GitHub Releases API 的资产 `digest`（SHA256）并验证实际下载文件，缺少摘要或不匹配时拒绝继续。
+
+如果中断发生在这一阶段（依赖安装成功，但尚未初始化管理员数据库和服务），将最新完整项目上传 main 分支后，重新执行上方一行安装命令即可，通常无需重装系统或删除已安装依赖。若提示已有部署，不要删除数据库，应先确认已有服务和数据。

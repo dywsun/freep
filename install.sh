@@ -112,9 +112,13 @@ setup_python
 chmod -R a+rX,go-w /opt/relay/venv
 asset="sing-box-$SB_VERSION-linux-$arch.tar.gz"
 release="https://github.com/SagerNet/sing-box/releases/download/v$SB_VERSION"
+echo "读取 sing-box $SB_VERSION 官方发布信息……"
+curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 60 -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/SagerNet/sing-box/releases/tags/v$SB_VERSION" -o "$relay_tmp/release.json" || {
+  echo '读取官方发布信息失败，请检查网络或 GitHub API 限流；不会跳过内核校验。' >&2
+  exit 1
+}
 curl --fail --location --proto '=https' --tlsv1.2 "$release/$asset" -o "$relay_tmp/$asset"
-curl --fail --location --proto '=https' --tlsv1.2 "$release/sing-box-$SB_VERSION-checksums.txt" -o "$relay_tmp/checksums"
-(cd "$relay_tmp"; grep -E "[ *]${asset//./\.}$" checksums > selected; [[ $(wc -l < selected) == 1 ]]; sha256sum -c selected)
+/opt/relay/venv/bin/python /opt/relay/scripts/verify-release.py "$relay_tmp/release.json" "$relay_tmp/$asset" "$asset"
 tar -xzf "$relay_tmp/$asset" -C "$relay_tmp"
 install -m 755 "$relay_tmp/sing-box-$SB_VERSION-linux-$arch/sing-box" /opt/relay/bin/sing-box
 if ! /opt/relay/bin/sing-box version | grep -q with_v2ray_api; then
