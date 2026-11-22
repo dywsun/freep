@@ -14,6 +14,10 @@ jobs:
         with:
           node-version: '22'
       - run: python -m unittest discover -s tests -v
-      - run: node --check frontend/app.js && node --check frontend/live.js && node --check frontend/share.js
+      - run: node --check frontend/app.js && node --check frontend/live.js && node --check frontend/share.js && node --check frontend/monitor.js
       - run: node tests/test_qr.cjs
-      - run: bash -n install.sh scripts/build-sing-box.sh
+      - run: node tests/test_traffic.cjs
+      - run: python scripts/build_worker.py
+      - run: node --check worker-panel/app.js && node --check worker-service/src/worker.js
+      - run: node tests/test_worker.mjs
+      - run: bash -n install.sh scripts/build-sing-box.sh scripts/install-kernel.sh

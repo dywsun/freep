@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-# Installer invokes this only when the official binary lacks user-statistics support.
+# Shared native build path for GitHub Actions and the local fallback.
 : "${SB_VERSION:?}" "${RELAY_BUILD_ARCH:?}"
+[[ $SB_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+[[ $RELAY_BUILD_ARCH == amd64 || $RELAY_BUILD_ARCH == arm64 ]] || exit 1
+RELAY_BUILD_OUTPUT="${RELAY_BUILD_OUTPUT:-/opt/relay/bin/sing-box}"
 build_dir="$(mktemp -d)"
 trap 'rm -rf -- "$build_dir"' EXIT
 GO_VERSION="${GO_VERSION:-1.26.10}"
 [[ $GO_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+go_bin="${RELAY_GO_BIN:-}"
+if [[ -z $go_bin ]] && command -v go >/dev/null && [[ $(go version) == "go version go$GO_VERSION linux/$RELAY_BUILD_ARCH" ]]; then
+  go_bin="$(command -v go)"
+fi
+if [[ -z $go_bin ]]; then
 archive="go$GO_VERSION.linux-$RELAY_BUILD_ARCH.tar.gz"
 curl --fail --location --proto '=https' --tlsv1.2 'https://go.dev/dl/?mode=json&include=all' -o "$build_dir/go-releases.json"
 go_sha="$("${RELAY_PYTHON:-python3}" - "$build_dir/go-releases.json" "$archive" <<'PY'
@@ -18,10 +26,13 @@ PY
 curl --fail --location --proto '=https' --tlsv1.2 "https://go.dev/dl/$archive" -o "$build_dir/$archive"
 printf '%s  %s\n' "$go_sha" "$build_dir/$archive" | sha256sum -c -
 tar -xzf "$build_dir/$archive" -C "$build_dir"
+  go_bin="$build_dir/go/bin/go"
+fi
+[[ $("$go_bin" version) == "go version go$GO_VERSION linux/$RELAY_BUILD_ARCH" ]] || { echo 'Go 工具链版本或架构不匹配'; exit 1; }
 curl --fail --location --proto '=https' --tlsv1.2 "https://github.com/SagerNet/sing-box/archive/refs/tags/v$SB_VERSION.tar.gz" -o "$build_dir/source.tar.gz"
 tar -xzf "$build_dir/source.tar.gz" -C "$build_dir"
 cd "$build_dir/sing-box-$SB_VERSION"
 # Only capabilities used by this project; no need for TUN/WARP/Cloudflared.
-CGO_ENABLED=0 GOTOOLCHAIN=local GOCACHE="$build_dir/cache" GOMODCACHE="$build_dir/mod" "$build_dir/go/bin/go" build -trimpath -tags 'with_quic,with_utls,with_v2ray_api' -ldflags "-X github.com/sagernet/sing-box/constant.Version=$SB_VERSION" -o "$build_dir/sing-box" ./cmd/sing-box
-install -m 755 "$build_dir/sing-box" /opt/relay/bin/sing-box
-/opt/relay/bin/sing-box version | grep -q with_v2ray_api
+CGO_ENABLED=0 GOTOOLCHAIN=local GOOS=linux GOARCH="$RELAY_BUILD_ARCH" GOCACHE="${RELAY_GO_CACHE:-$build_dir/cache}" GOMODCACHE="${RELAY_GO_MOD_CACHE:-$build_dir/mod}" "$go_bin" build -trimpath -tags 'with_quic,with_utls,with_v2ray_api' -ldflags "-X github.com/sagernet/sing-box/constant.Version=$SB_VERSION" -o "$build_dir/sing-box" ./cmd/sing-box
+install -m 755 "$build_dir/sing-box" "$RELAY_BUILD_OUTPUT"
+"$RELAY_BUILD_OUTPUT" version | grep -q with_v2ray_api

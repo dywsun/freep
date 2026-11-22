@@ -57,7 +57,7 @@ sudo --preserve-env=PUBLIC_HOST,WEB_PORT,VMESS_PORT,TUIC_PORT,VLESS_PORT,HYSTERI
 
 ### 内核与证书
 
-默认固定 sing-box **1.14.4**。先校验官方发布包 SHA256。官方默认构建不含 `with_v2ray_api` 时，安装器自动下载并校验 Go 1.26.10 工具链，从对应版本官方源码编译 `with_quic,with_utls,with_v2ray_api` 内核。首次编译可能需要数分钟、网络访问与较多内存；本项目没有把未验证的空统计伪装成正常数据。
+默认固定 sing-box **1.14.4**。优先复用本机匹配的统计内核，其次下载本仓库经过 SHA256 与版本/功能检查的预编译包；没有对应发布时才使用官方同版本源码及校验后的 Go 工具链编译。首次 GitHub 发布完成后，通常无需在 VPS 上安装 Go 或编译。详见下方「加速安装」。
 
 协议默认参数参考原 sb.sh：
 
@@ -71,6 +71,14 @@ sudo --preserve-env=PUBLIC_HOST,WEB_PORT,VMESS_PORT,TUIC_PORT,VLESS_PORT,HYSTERI
 | AnyTLS | TLS |
 
 端口与用户凭据不复制原脚本的随机端口和全协议共用 UUID：端口按环境变量固定，凭据按用户/协议独立。节点证书可通过 `TLS_CERT/TLS_KEY` 替换，SNI 用 `TLS_SERVER_NAME`；Reality 握手还可用 `REALITY_HANDSHAKE_HOST/REALITY_HANDSHAKE_PORT`，WS 路径用 `VMESS_WS_PATH`，TUIC 拥塞控制用 `TUIC_CONGESTION_CONTROL`。设置受信任节点证书时，应同时设置匹配的 TLS_SERVER_NAME；VMess 需要 TLS 则设 VMESS_TLS=true。
+
+### 资源监控
+
+侧栏保留概览、用户管理、协议入口、订阅管理、资源监控；移除没有实际用途的个人工作空间、分流设置、系统设置入口。
+
+资源监控读取运行管理后端这台机器的真实数据，每 5 秒采样并自动更新：CPU 使用率和逻辑核心数、1/5/15 分钟系统负载、内存使用/可用量、根文件系统空间占用、系统磁盘读写速率、网卡收发速率和累计字节。保留最近 5 分钟趋势（内存中，后台重启后重新积累）。本地预览显示本机资源，并明确标注不是 VPS。
+
+网络默认优先显示 Linux 默认路由接口，不把虚拟接口全部相加，列表可查看各网卡。网卡流量包含整机服务，与 sing-box 用户用量不同。未取得网卡带宽上限时不展示虚假的网络利用率百分比；磁盘空间占用不等于 I/O 忙碌率。首次采样需要等待下一周期形成速率。
 
 ### 网站 HTTPS、域名和自定义路径
 
@@ -115,7 +123,7 @@ CentOS 7/8 通过独立 yum 配置使用 CentOS Vault/EPEL 归档，不覆盖现
 - 用户：创建、启用/停用、协议权限分配、单协议凭据重置、专属订阅令牌重置。
 - VMess/VLESS 使用 UUID，TUIC v5 使用 UUID + 密码，HY2/AnyTLS 使用独立密码；凭据按用户、按协议独立生成。
 - 协议：固定端口编辑、全局启用/停用；所有用户共享入口。
-- 订阅：Karing/URI 返回 Base64 分享链接集合；Mihomo 返回 YAML 1.2 兼容的 JSON 完整配置（JSON 是 YAML 1.2 子集）；sing-box 返回 JSON。完整配置包含选择/测速组、国内分流规则。Karing 节点订阅使用其自身分流设置。
+- 订阅只提供节点，不包含分流规则、策略组或本地监听配置。界面提供通用节点订阅（v2rayN / v2rayNG / Karing，Base64 链接集合）与 Clash / Mihomo 节点订阅（只有 `proxies`，JSON 形式的 YAML，可作为 `proxy-providers` 来源）。旧 `karing` 格式保留为通用格式别名；旧 `singbox` 地址仅返回节点 `outbounds` 片段，不是完整客户端配置。
 - 所有客户端必须按具体版本验证。订阅转换并不意味着所有客户端支持全部协议。
 - 管理操作有只记录动作、不含凭据的审计日志，可登录后请求 `/api/audit`。
 
@@ -137,7 +145,9 @@ HTTP 服务运行身份为 `relay-panel`，只能通过 sudo 调用 root 所有�
 
 ## 流量与额度
 
-使用 sing-box V2Ray gRPC StatsService，`users[].name` 采用 `用户ID:协议`。VMess/TUIC 将认证后的用户名称传入连接元数据，采集该用户的 TCP/UDP 上下行计数。后台每 10 秒读取不重置的远端计数，SQLite 保存增量，并按 systemd 进程启动单调时间戳 区分内核重启。原始用户计数按协议存储，页面展示用户本月合计及小时曲线。
+使用 sing-box V2Ray gRPC StatsService，`users[].name` 采用 `用户ID:协议`。VMess/TUIC 将认证后的用户名称传入连接元数据，采集该用户的 TCP/UDP 上下行计数。后台每 10 秒读取不重置的远端计数，SQLite 保存增量，并按 systemd 进程启动单调时间戳 区分内核重启。原始用户计数按协议存储，页面分别展示每位用户本月上行、下行、合计及额度；概览展示本月上下行卡片，以及最近 24 小时的两条独立小时流量曲线。
+
+后端每 10 秒采集一次，页面登录后每 5 秒自动读取仅含统计数据的接口，不需要手动刷新。正常情况下有约 10–15 秒显示延迟，属于近实时显示，不是逐秒网速。后台标签页隐藏时暂停读取，回到页面立即更新；退出登录停止轮询，网络错误保留旧值并提示。更新只替换统计区域，不重载页面或打断表单，并保留“刷新统计”按钮。概览、用户列表、CSV 导出均区分上下行，按上海时区自然月统计。
 
 上行=客户端到代理服务器，下行=服务器到客户端。这里是内核记录的代理流量，不含全部 TLS/QUIC、TCP/IP 开销，不等同于网卡字节或云厂商账单。采集故障会明确显示状态；突发断电/内核崩溃会丢失最后一个采样周期的数据，不适合严格计费。
 
@@ -156,6 +166,32 @@ sudo journalctl -u relay-panel -u relay-sing-box --no-pager -n 100
 
 Nginx 配置在 `/etc/nginx/conf.d/relay.conf`；源码及 venv 在 `/opt/relay`；数据在 `/var/lib/relay`；root 配置和证书在 `/etc/relay`。
 
+## 前端热更新
+
+支持只切换网站页面，不重启管理后台、Nginx 或 sing-box，不修改用户数据库、节点凭据和证书。首次使用这一功能必须先安装包含版本化静态资源处理的后端；旧版后端不能只替换网页就获得新增的资源监控 API。
+
+将代码推送 GitHub 后，在运行兼容后端的 VPS 执行最新安装入口的更新命令：
+
+```bash
+bash <(curl -fLs https://raw.githubusercontent.com/dywsun/freep/main/install.sh) update-web
+```
+
+也可直接执行已安装工具：
+
+```bash
+/opt/relay/venv/bin/python /opt/relay/scripts/update_frontend.py
+```
+
+默认将 main 解析为固定提交，下载到暂存目录，检查文件完整性和 `frontend/manifest.json` 中的 API 兼容版本，然后原子切换 `/opt/relay/web-current`。版本目录保存在 `/opt/relay/web-releases/提交SHA`；原页面引用带版本号的静态资源，避免一次加载混用新旧 JS/CSS。更新失败不切换当前版本。VPS 如果安装了 Node，还会检查 JS 语法；仓库 CI 应先完成完整前端检查。
+
+已打开的页面每 30 秒检查页面版本，发现新版本显示“页面有更新 · 刷新”，由用户点击，不强制刷新填写中的表单。需要回退到保留版本时：
+
+```bash
+/opt/relay/venv/bin/python /opt/relay/scripts/update_frontend.py --rollback 目标版本40位SHA
+```
+
+这不是完整后端/内核升级工具。后端接口发生不兼容变化时会拒绝热更新，需要先部署对应后端版本。
+
 ## 本地开发
 
 ```bash
@@ -171,6 +207,8 @@ node --check frontend/app.js
 node --check frontend/live.js
 node --check frontend/share.js
 node tests/test_qr.cjs
+node tests/test_traffic.cjs
+node --check frontend/monitor.js
 bash -n install.sh scripts/build-sing-box.sh
 ```
 
@@ -191,3 +229,77 @@ bash -n install.sh scripts/build-sing-box.sh
 早期安装器错误引用了不存在的独立校验文件。当前已改为读取 GitHub Releases API 的资产 `digest`（SHA256）并验证实际下载文件，缺少摘要或不匹配时拒绝继续。
 
 如果中断发生在这一阶段（依赖安装成功，但尚未初始化管理员数据库和服务），将最新完整项目上传 main 分支后，重新执行上方一行安装命令即可，通常无需重装系统或删除已安装依赖。若提示已有部署，不要删除数据库，应先确认已有服务和数据。
+
+## Relay Worker 订阅网关
+
+单个 Worker 可服务多台独立 VPS。仅保存 UUID、公网 IP、回源 URL、管理密钥哈希等绑定数据；订阅实时由 VPS 生成，不上传或缓存用户快照。注册必须验证注册令牌，后续更新必须验证该 VPS 的独立管理密钥。
+
+## 手动部署一次
+
+1. 在 Cloudflare 控制台创建 D1 数据库，例如 `relay-gateway`。
+2. 打开 D1 的 Console，执行本目录 `schema.sql` 的全部 SQL。
+3. 创建 Worker，例如 `relay-subscriptions`。将 `dist/worker.js` 的全部内容粘贴到代码编辑器，保存并部署。此单文件已包含网站，不需要另外部署 Pages。
+4. 在 Worker Settings → Bindings 中绑定 D1，变量名必须为 `DB`，选择上面的数据库。
+5. Compatibility date 设置为 `2026-11-22`，Compatibility flags 添加 `nodejs_compat`。不设置则 `node:net` 无法加载。
+6. 在 Domains & Routes 添加 Custom Domain：`subp.dywsun.dpdns.org`。该域名需属于当前账户的有效 Cloudflare Zone，不能有冲突 CNAME。无需设置指向 VPS 的 A 记录。
+7. 关闭 Worker invocation logs / observability，避免记录包含用户令牌的订阅 URL。本项目配置默认关闭。
+8. 打开该域名，首次为固定账号 **dywsun** 设置密码（12–256 字符，再次确认）。首次设置无需初始化令牌；按用户要求使用先到先设置。数据库已有管理员后无法再次初始化，竞争初始化只有一个请求成功。
+9. 登录 → 注册设置 → 随机生成并保存注册令牌（24–256 位）。可以暂停新注册或更换令牌，不影响已注册 VPS。
+
+随后，每台 VPS 在网页「订阅入口设置」填写 Worker URL 和注册令牌，并点击注册。名称与公网 IP 可自动获取，也可手动填写；默认回源为 `https://本机域名/后台路径/sub`。UUID 和独立管理密钥自动生成并保存在 VPS 的 `gateway.json`（0600），注册令牌不保存。切换订阅入口为 Worker 后，链接形如：
+
+```text
+https://subp.dywsun.dpdns.org/sub/<VPS-UUID>/<用户令牌>?format=uri
+```
+
+新安装器同时配置 Nginx **443 HTTPS 订阅回源入口**，只代理 `后台路径/sub/` 的 GET/HEAD。管理后台仍在 18898，443 不提供后台。需在 VPS 供应商安全组放行 443/TCP，并保留证书续期使用的 80/TCP。旧版本需要升级后端与 Nginx 配置后再接入。自定义回源必须是公网 DNS 域名、受信任证书、标准 443，不允许私网/IP 字面量/重定向。不要将回源指向 Worker 域名。
+
+## 管理与认证
+
+- 管理 API 全部需要 Secure/HttpOnly/SameSite=Strict 会话 Cookie，写入操作另需同源 Origin 和 CSRF Token。
+- 密码使用 PBKDF2-HMAC-SHA256（100,000 次，随机盐）；D1 不保存明文密码、注册令牌和 VPS 管理密钥。
+- 账户安全页修改密码需验证原密码；修改后全部旧会话失效，需要重新登录。会话最长 8 小时。
+- 登录、初始化、改密与注册有按 IP 的请求频率限制。高流量环境可额外配置 Cloudflare WAF 限速；不要给整个订阅域名添加交互式挑战，否则客户端可能无法导入。
+- 禁用 VPS 后立即拒绝新的 Workers 订阅请求；即使回源期间并发禁用，也会在发送响应前再次检查绑定。已发送的响应无法撤回。
+- 删除绑定同时撤销独立管理密钥。无法凭注册令牌覆盖同 UUID 不同 IP/回源/管理密钥的绑定；合法改 IP 使用该 VPS 的独立密钥更新。
+- 注册 IP 是机器提交的公网 IP，面板用来定位，**不是认证凭据或由 Worker 探测验证的在线状态**。多 VPS 绑定不会互相覆盖。
+- 只有订阅接口会回源；不转发浏览器 Cookie、管理员凭据或任意目标参数，不缓存订阅。D1 读取使用 first-primary 会话，避免禁用后读取旧状态。
+- 回源失败返回错误且不删除绑定。不会停用实际节点或本机订阅；用户到期和流量额度仍由 VPS 执行。
+
+## 更新与本地验证
+
+修改前端或 Worker 源码后执行 `python3 scripts/build_worker.py`（仓库根目录），重新上传生成的 `dist/worker.js`；复用原 D1，账号、注册令牌与绑定保留。更新前务必备份 D1。不要执行删除管理员/绑定的 SQL。
+
+本地需要 Node 22.13+（内置 SQLite）：
+
+```bash
+python3 scripts/build_worker.py
+node scripts/worker_preview.mjs
+```
+
+打开 `http://127.0.0.1:18094/`，本机数据在 `.local/worker-gateway-preview.db`。该预览使用真实 API/哈希/数据库，但不是部署到 Cloudflare。请使用独立测试密码。忘记生产密码时，只能由 Cloudflare 管理员通过 D1 清除会话并重置管理员后重新初始化；没有公开密码找回接口。
+
+当前已做 Node + SQLite 接口测试，尚未使用真实 Cloudflare 账户部署验收。Workers Free 的 CPU/请求配额可能影响大量登录或订阅请求，具体以控制台套餐限制为准。
+
+## 加速安装：预编译统计内核
+
+安装器不再先下载官方内核再临时编译。默认按以下顺序安装与 `SB_VERSION` 一致且包含 `with_quic / with_utls / with_v2ray_api` 的统计内核：
+
+1. 复用本机已经存在的匹配内核。
+2. 下载本仓库 GitHub Releases 的预编译 Linux amd64 / arm64 内核，使用 GitHub 发布记录中的 SHA256 校验后，再验证版本和功能标签。
+3. 发布不存在或暂时无法读取时，回退为本机源码编译；若下载文件校验失败则立即停止，不跳过校验或悄悄回退。
+
+首次启用需要将新工作流推送至 GitHub，然后进入仓库 **Actions → Build statistics kernel → Run workflow**。默认版本为 `1.14.4`；两个架构分别在原生 Linux runner 构建、验证，共同发布到 `sb-stat-v1.14.4-go1.26.10-r1`。工作流相关文件推送 main 时也自动触发。后续安装只下载内核，不再下载 Go 和编译依赖，具体时间取决于网络与其他系统依赖、证书申请。项目预编译包不是 SagerNet 官方包。
+
+工作流缓存 Go 模块和构建产物；已完整发布的同版本包不会重新覆盖。若中断留下不完整 draft，先在 Releases 检查该草稿再重试。改变功能标签/编译配方时必须增加发布修订号并同步修改安装器标签，避免同名版本内容漂移。
+
+可在执行脚本前设置：
+
+```bash
+# 仅允许预编译包，不可用就提示退出，避免等待源码编译。
+export RELAY_KERNEL_MODE=prebuilt
+# 默认 auto；排查时可以改为 source，强制源码编译。
+# export RELAY_KERNEL_MODE=source
+```
+
+`RELAY_KERNEL_REPO` 可指定预编译包来源，默认与 `RELAY_REPO` 相同。请仅使用可信仓库。源码编译回退会校验 Go 压缩包 SHA256，并优先复用版本、架构匹配的 Go 工具链。

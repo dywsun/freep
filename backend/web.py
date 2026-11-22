@@ -27,7 +27,7 @@ def nginx_config(host, web_port, api_port, base_path='', challenge_only=False):
 }}
 '''
     if challenge_only: return challenge
-    return challenge + f'''server {{
+    panel = f'''server {{
     listen {web_port} ssl default_server;
     listen [::]:{web_port} ssl default_server;
     server_name {host};
@@ -46,3 +46,24 @@ def nginx_config(host, web_port, api_port, base_path='', challenge_only=False):
     location / {{ return 404; }}
 }}
 '''
+
+    subscription_origin = f'''server {{
+    listen 443 ssl;
+    error_log /dev/null crit;
+    listen [::]:443 ssl;
+    server_name {host};
+    ssl_certificate /etc/relay/web-cert.pem;
+    ssl_certificate_key /etc/relay/web-key.pem;
+    ssl_protocols TLSv1.2;
+    access_log off;
+    location ^~ {base_path}/sub/ {{
+        limit_except GET {{ deny all; }}
+        proxy_pass http://127.0.0.1:{api_port};
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 15s;
+    }}
+    location / {{ return 404; }}
+}}
+'''
+    return challenge + panel + subscription_origin

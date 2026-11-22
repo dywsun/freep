@@ -20,8 +20,11 @@ class WebTests(unittest.TestCase):
     def test_https_only_prefix_with_no_path_stripping(self):
         config=nginx_config('free.dywsun.dpdns.org',18898,18090,'/freedom-network')
         self.assertIn('listen 18898 ssl',config)
+        self.assertIn('listen 443 ssl;',config)
+        self.assertIn('location ^~ /freedom-network/sub/',config)
+        self.assertIn('limit_except GET { deny all; }',config)
         self.assertIn('location ^~ /freedom-network/',config)
         self.assertIn('proxy_pass http://127.0.0.1:18090;',config)
         self.assertIn('return 308 /freedom-network/;',config)
-        self.assertEqual(config.count('location / { return 404; }'),2)
+        self.assertEqual(config.count('location / { return 404; }'),3)
         self.assertNotIn('proxy_pass http://127.0.0.1:18090/;',config)

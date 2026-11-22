@@ -1,0 +1,1 @@
+{"name":"relay-subscription-gateway","private":true,"type":"module","scripts":{"build":"python3 ../scripts/build_worker.py","test":"node ../tests/test_worker.mjs"}}

@@ -110,7 +110,7 @@ configure_selinux() {
 
 configure_firewall() {
   if command -v firewall-cmd >/dev/null && firewall-cmd --state >/dev/null 2>&1; then
-    for relay_port in 80 "$WEB_PORT" "$VMESS_PORT" "$VLESS_PORT" "$ANYTLS_PORT"; do
+    for relay_port in 80 443 "$WEB_PORT" "$VMESS_PORT" "$VLESS_PORT" "$ANYTLS_PORT"; do
       firewall-cmd --add-port="$relay_port/tcp"
       firewall-cmd --permanent --add-port="$relay_port/tcp"
     done
@@ -119,7 +119,7 @@ configure_firewall() {
       firewall-cmd --permanent --add-port="$relay_port/udp"
     done
   elif command -v ufw >/dev/null && ufw status | grep -q 'Status: active'; then
-    for relay_port in 80 "$WEB_PORT" "$VMESS_PORT" "$VLESS_PORT" "$ANYTLS_PORT"; do ufw allow "$relay_port/tcp"; done
+    for relay_port in 80 443 "$WEB_PORT" "$VMESS_PORT" "$VLESS_PORT" "$ANYTLS_PORT"; do ufw allow "$relay_port/tcp"; done
     for relay_port in "$TUIC_PORT" "$HYSTERIA2_PORT"; do ufw allow "$relay_port/udp"; done
   fi
 }

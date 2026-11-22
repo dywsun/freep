@@ -11,7 +11,7 @@ import threading
 import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'backend'))
 from app import Store, Handler, ThreadingHTTPServer, password_hash, check_password
-from model import initial, credential, server_config, subscription, validate
+from model import initial, credential, server_config, subscription, subscription_limits, validate
 
 class CoreTests(unittest.TestCase):
     def setUp(self):
@@ -66,6 +66,10 @@ class CoreTests(unittest.TestCase):
         for fmt in ['uri','karing','singbox','mihomo']:
             content,_=subscription(s,a,self.settings,fmt)
             decoded=base64.b64decode(content).decode() if fmt in ('uri','karing') else content.decode()
+            if fmt=='mihomo':self.assertEqual(set(json.loads(content)),{'proxies'})
+            if fmt=='singbox':
+                obj=json.loads(content);self.assertEqual(set(obj),{'outbounds'})
+                self.assertFalse(any(n['type'] in ('direct','selector','urltest') for n in obj['outbounds']))
             if fmt in ('uri','karing'):
                 vmess=next(l for l in decoded.splitlines() if l.startswith('vmess://'))
                 decoded+=base64.b64decode(vmess[8:]).decode()
@@ -84,6 +88,45 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(cfg['inbounds'][1]['congestion_control'],'cubic')
         nodes=json.loads(subscription(s,s['users'][0],settings,'singbox')[0])['outbounds']
         self.assertEqual(next(n for n in nodes if n['type']=='vmess')['transport']['path'],'shared-id-vm')
+
+    def test_monthly_directions_and_traffic_snapshot_without_credentials(self):
+        import time
+        u=self.create()
+        now=datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8)))
+        start=int(now.replace(day=1,hour=0,minute=0,second=0,microsecond=0).timestamp())
+        with self.store.db:
+            self.store.db.executemany('INSERT INTO traffic VALUES(?,?,?,?,?)',[
+                (start-1,u['id'],'vmess','uplink',9999),
+                (int(time.time()),u['id'],'vmess','uplink',120),
+                (int(time.time()),u['id'],'tuic','uplink',30),
+                (int(time.time()),u['id'],'tuic','downlink',800)])
+        snapshot=self.store.traffic_snapshot();row=snapshot['users'][0]
+        self.assertEqual(row['upload_bytes'],150)
+        self.assertEqual(row['download_bytes'],800)
+        self.assertEqual(row['used_bytes'],950)
+        self.assertEqual(snapshot['stats']['month_bytes'],950)
+        self.assertEqual(snapshot['stats']['directions'],{'uplink':150,'downlink':800})
+        self.assertEqual(snapshot['stats']['sample_interval'],10)
+        self.assertNotIn('credentials',row);self.assertNotIn('token',row)
+        public=self.store.public_state()['users'][0]
+        self.assertEqual(public['used_bytes'],950)
+        self.assertEqual(public['upload_bytes']+public['download_bytes'],public['used_bytes'])
+
+    def test_unlimited_limits_and_switch_back(self):
+        a=self.create();b=self.create()
+        result=self.store.mutate('user-update',{'revision':2,'id':a['id'],'quota':None,'expire':None})
+        u=result['users'][0];self.assertTrue(u['effective']);self.assertIsNone(u['quota']);self.assertIsNone(u['expire'])
+        state=self.store.load();usage={a['id']:999999*1024**3}
+        self.assertEqual(len(server_config(state,self.settings,usage)['inbounds'][0]['users']),2)
+        expire,info=subscription_limits(u,123,456)
+        self.assertIsNone(expire);self.assertEqual(info,'upload=123; download=456')
+        self.store.mutate('user-update',{'revision':3,'id':a['id'],'quota':1,'expire':'2000-01-01'})
+        self.assertFalse(self.store.public_state()['users'][0]['effective'])
+        self.store.mutate('user-create',{'revision':4,'name':'Unlimited','quota':None,'expire':None,'protocols':['VMess']})
+        self.assertTrue(self.store.public_state()['users'][-1]['effective'])
+        for field,value in [('quota',-1),('quota',0),('expire','invalid')]:
+            with self.assertRaises((AssertionError,ValueError)):
+                self.store.mutate('user-update',{'revision':5,'id':b['id'],field:value})
 
     def test_auth_hash(self):
         encoded=password_hash('another-password-456')
@@ -104,6 +147,8 @@ class HttpTests(CoreTests):
             r=conn.getresponse();body=r.read();return r,body
         r,_=req('GET','/api/state');self.assertEqual(r.status,401)
         r,_=req('GET','/api/share?id=unknown');self.assertEqual(r.status,401)
+        r,_=req('GET','/api/traffic');self.assertEqual(r.status,401)
+        r,_=req('GET','/api/metrics');self.assertEqual(r.status,401)
         r,_=req('POST','/api/login',{'username':'admin','password':'bad-password-123'});self.assertEqual(r.status,401)
         r,body=req('POST','/api/login',{'username':'admin','password':'test-password-123'})
         self.assertEqual(r.status,200);cookie=r.getheader('Set-Cookie').split(';')[0];csrf=json.loads(body)['csrf']
@@ -121,6 +166,14 @@ class HttpTests(CoreTests):
         self.assertIn(u['credentials']['TUIC v5']['uuid'],next(n['uri'] for n in nodes if n['protocol']=='TUIC v5'))
         r,_=req('GET','/api/share?id=unknown',headers=headers);self.assertEqual(r.status,404)
         r,_=req('GET','/sub/not-a-token');self.assertEqual(r.status,404)
+        r,_=req('GET','/api/cloudflare');self.assertEqual(r.status,401)
+        r,_=req('POST','/api/export',{'ids':[u['id']]},{'Cookie':cookie});self.assertEqual(r.status,403)
+        r,body=req('POST','/api/export',{'ids':[u['id']],'mode':'subscription','format':'mihomo'},headers)
+        self.assertEqual(r.status,200,body);self.assertEqual(json.loads(body)['text'],'HTTP test '+u['subscription']+'?format=mihomo')
+        r,body=req('POST','/api/export',{'ids':[u['id']],'mode':'node'},headers)
+        self.assertEqual(r.status,200,body);self.assertEqual(len(json.loads(body)['text'].splitlines()),2)
+        r,body=req('POST','/api/export',{'ids':[],'mode':'node'},headers);self.assertEqual(json.loads(body)['text'],'')
+        r,_=req('POST','/api/export',{'ids':['unknown']},headers);self.assertEqual(r.status,400)
         r,_=req('POST','/api/logout',{},headers);self.assertEqual(r.status,200)
         r,_=req('GET','/api/state',headers=headers);self.assertEqual(r.status,401)
 
@@ -140,7 +193,7 @@ class PrefixTests(CoreTests):
             r,_=request('GET',path);self.assertEqual(r.status,404,path)
         r,_=request('GET',prefix);self.assertEqual(r.status,308);self.assertEqual(r.getheader('Location'),prefix+'/')
         r,body=request('GET',prefix+'/');self.assertEqual(r.status,200);self.assertIn(b'window.RELAY_BASE_PATH="/freedom-network"',body)
-        for asset in ['app.js','live.js','style.css','share.js','vendor/qrcode.js']:
+        for asset in ['app.js','live.js','style.css','share.js','traffic.js','monitor.js','vendor/qrcode.js']:
             r,_=request('GET',prefix+'/'+asset);self.assertEqual(r.status,200)
         r,body=request('POST',prefix+'/api/login',{'username':'admin','password':'test-password-123'})
         self.assertEqual(r.status,200,body);self.assertIn('Path=/freedom-network/;',r.getheader('Set-Cookie'))
@@ -154,6 +207,12 @@ class PrefixTests(CoreTests):
         r,body=request('GET',prefix+'/api/share?id='+u['id'],headers=headers)
         self.assertEqual(r.status,200,body);self.assertEqual(len(json.loads(body)['nodes']),1)
         r,_=request('GET','/api/share?id='+u['id'],headers=headers);self.assertEqual(r.status,404)
+        r,body=request('GET',prefix+'/api/traffic',headers=headers);self.assertEqual(r.status,200);self.assertNotIn(b'credentials',body)
+        r,_=request('GET','/api/traffic',headers=headers);self.assertEqual(r.status,404)
+        r,body=request('GET',prefix+'/api/metrics',headers=headers);self.assertEqual(r.status,200);self.assertIn('available',json.loads(body))
+        r,_=request('GET','/api/metrics',headers=headers);self.assertEqual(r.status,404)
+        r,body=request('GET',prefix+'/api/frontend-version',headers=headers);self.assertEqual(r.status,200);version=json.loads(body)['version']
+        r,_=request('GET',prefix+'/assets/'+version+'/monitor.js');self.assertEqual(r.status,200);self.assertIn('immutable',r.getheader('Cache-Control'))
         state=self.store.load()
         self.store.mutate('user-update',{'revision':state['revision'],'id':u['id'],'active':False})
         r,_=request('GET',prefix+'/api/share?id='+u['id'],headers=headers);self.assertEqual(r.status,400)

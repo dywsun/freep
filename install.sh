@@ -34,6 +34,12 @@ source /etc/os-release
 [[ ${ID:-} =~ ^(debian|ubuntu|centos)$ ]] || { echo '支持 Ubuntu 22.04+/Debian 12+ 与 CentOS 7/8/Stream 9/10（systemd）'; exit 1; }
 command -v systemctl >/dev/null || { echo '需要 systemd'; exit 1; }
 command="${1:-install}"
+if [[ $command == update-web ]]; then
+  updater="$SCRIPT_DIR/scripts/update_frontend.py"
+  [[ -f $updater ]] || updater=/opt/relay/scripts/update_frontend.py
+  [[ -f $updater ]] || { echo '未安装支持前端更新的版本，请先升级后端'; exit 1; }
+  exec /opt/relay/venv/bin/python "$updater" --repo "$RELAY_REPO" --ref "$RELAY_REF"
+fi
 if [[ $command == reset-password ]]; then
   exec sudo -u relay-panel /opt/relay/venv/bin/python /opt/relay/backend/app.py reset-password
 fi
@@ -47,7 +53,7 @@ if [[ $command == backup ]]; then
   tar -czf "$backup_file" /etc/relay /var/lib/relay
   echo "备份已保存：$backup_file（包含私钥和用户凭据，请保密）"; exit
 fi
-[[ $command == install ]] || { echo '支持：install / status / backup / reset-password'; exit 1; }
+[[ $command == install ]] || { echo '支持：install / status / backup / reset-password / update-web'; exit 1; }
 [[ ! -e /etc/relay/settings.json && ! -e /var/lib/relay/relay.db ]] || { echo '检测到已有部署，拒绝覆盖；请先备份，升级需使用专用迁移流程。'; exit 1; }
 # First interactive step, before package installation or any service changes.
 [[ -r /dev/tty ]] || { echo '首次安装需要交互终端设置管理员'; exit 1; }
@@ -75,6 +81,9 @@ for value in "$VMESS_PORT" "$TUIC_PORT" "$VLESS_PORT" "$HYSTERIA2_PORT" "$ANYTLS
   ports+=("$value")
   if command -v ss >/dev/null && ss -H -lntu | awk '{print $5}' | grep -Eq ":${value}$"; then echo "端口已占用：$value"; exit 1; fi
 done
+if command -v ss >/dev/null && ss -H -lnt | awk '{print $4}' | grep -Eq ':443$'; then
+  echo '443 端口已占用，无法创建独立订阅 HTTPS 回源入口，请先检查现有服务。'; exit 1
+fi
 if [[ -n $TLS_CERT || -n $TLS_KEY ]]; then
   [[ -f $TLS_CERT && -f $TLS_KEY ]] || { echo 'TLS_CERT/TLS_KEY 必须同时指定有效文件'; exit 1; }
 fi
@@ -110,21 +119,7 @@ chmod -R a+rX,go-w /opt/relay
 setup_python
 /opt/relay/venv/bin/pip install -r /opt/relay/backend/requirements.txt
 chmod -R a+rX,go-w /opt/relay/venv
-asset="sing-box-$SB_VERSION-linux-$arch.tar.gz"
-release="https://github.com/SagerNet/sing-box/releases/download/v$SB_VERSION"
-echo "读取 sing-box $SB_VERSION 官方发布信息……"
-curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 60 -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/SagerNet/sing-box/releases/tags/v$SB_VERSION" -o "$relay_tmp/release.json" || {
-  echo '读取官方发布信息失败，请检查网络或 GitHub API 限流；不会跳过内核校验。' >&2
-  exit 1
-}
-curl --fail --location --proto '=https' --tlsv1.2 "$release/$asset" -o "$relay_tmp/$asset"
-/opt/relay/venv/bin/python /opt/relay/scripts/verify-release.py "$relay_tmp/release.json" "$relay_tmp/$asset" "$asset"
-tar -xzf "$relay_tmp/$asset" -C "$relay_tmp"
-install -m 755 "$relay_tmp/sing-box-$SB_VERSION-linux-$arch/sing-box" /opt/relay/bin/sing-box
-if ! /opt/relay/bin/sing-box version | grep -q with_v2ray_api; then
-  echo '官方包未包含用户统计 API，开始构建相同版本的统计内核（首次可能需要数分钟及较多内存）。'
-  SB_VERSION="$SB_VERSION" RELAY_BUILD_ARCH="$arch" RELAY_PYTHON=/opt/relay/venv/bin/python bash /opt/relay/scripts/build-sing-box.sh
-fi
+SB_VERSION="$SB_VERSION" RELAY_BUILD_ARCH="$arch" RELAY_PYTHON=/opt/relay/venv/bin/python RELAY_REPO="$RELAY_REPO" bash /opt/relay/scripts/install-kernel.sh
 # Node defaults match sb.sh: Bing self-signed certificate, VMess WS without TLS.
 self_signed=false
 if [[ -n $TLS_CERT ]]; then

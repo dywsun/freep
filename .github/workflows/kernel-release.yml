@@ -1,0 +1,120 @@
+name: Build statistics kernel
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'sing-box version (without v)'
+        required: true
+        default: '1.14.4'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/kernel-release.yml'
+      - 'scripts/build-sing-box.sh'
+      - 'scripts/install-kernel.sh'
+permissions:
+  contents: read
+concurrency:
+  group: statistics-kernel-${{ github.event.inputs.version || '1.14.4' }}
+  cancel-in-progress: false
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      build: ${{ steps.plan.outputs.build }}
+    steps:
+      - name: Check immutable release
+        id: plan
+        env:
+          VERSION: ${{ github.event.inputs.version || '1.14.4' }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          tag="sb-stat-v$VERSION-go1.26.10-r1"
+          printf 'version=%s\ntag=%s\n' "$VERSION" "$tag" >> "$GITHUB_OUTPUT"
+          if gh release view "$tag" --json isDraft,assets > release.json 2>/dev/null; then
+            python3 - "$VERSION" <<'PY'
+          import json,sys
+          r=json.load(open('release.json'))
+          expected={f'sing-box-{sys.argv[1]}-linux-{a}-stat' for a in ('amd64','arm64')}
+          assert not r['isDraft'] and expected <= {a['name'] for a in r['assets']}, 'Existing release is incomplete; inspect it before retrying. Never overwrite published binaries.'
+          PY
+            echo 'build=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'build=true' >> "$GITHUB_OUTPUT"
+          fi
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.10'
+          cache: false
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/relay-go/build
+            ~/.cache/relay-go/mod
+          key: relay-go-1.26.10-${{ matrix.arch }}-${{ needs.prepare.outputs.version }}-r1
+          restore-keys: relay-go-1.26.10-${{ matrix.arch }}-
+      - name: Build and check native binary
+        env:
+          SB_VERSION: ${{ needs.prepare.outputs.version }}
+          RELAY_BUILD_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          mkdir -p output
+          output="$GITHUB_WORKSPACE/output/sing-box-$SB_VERSION-linux-$RELAY_BUILD_ARCH-stat"
+          RELAY_GO_BIN="$(command -v go)" RELAY_GO_CACHE="$HOME/.cache/relay-go/build" RELAY_GO_MOD_CACHE="$HOME/.cache/relay-go/mod" RELAY_BUILD_OUTPUT="$output" bash scripts/build-sing-box.sh
+          "$output" version
+          for feature in with_v2ray_api with_quic with_utls; do "$output" version | grep -q "$feature"; done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kernel-${{ matrix.arch }}
+          path: output/*
+          if-no-files-found: error
+  publish:
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: kernel-*
+          path: output
+          merge-multiple: true
+      - name: Publish both architectures together
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          SB_VERSION: ${{ needs.prepare.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd output
+          test -f "sing-box-$SB_VERSION-linux-amd64-stat"
+          test -f "sing-box-$SB_VERSION-linux-arm64-stat"
+          sha256sum sing-box-* > SHA256SUMS
+          printf 'Project-built sing-box %s. Go 1.26.10; CGO disabled; tags: with_quic,with_utls,with_v2ray_api. Native version checks passed on Linux amd64 and arm64. These are project binaries, not official SagerNet assets.\n' "$SB_VERSION" > release-notes.txt
+          gh release create "$RELEASE_TAG" --draft --target "$GITHUB_SHA" --title "Statistics kernel $SB_VERSION (r1)" --notes-file release-notes.txt
+          gh release upload "$RELEASE_TAG" sing-box-* SHA256SUMS
+          gh release edit "$RELEASE_TAG" --draft=false --latest=false

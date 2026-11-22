@@ -11,10 +11,10 @@ import sys
 def verify(metadata, asset_path, asset_name):
     matches = [a for a in metadata.get('assets', []) if a.get('name') == asset_name]
     if len(matches) != 1:
-        raise ValueError('官方发布记录中未找到唯一匹配的内核文件')
+        raise ValueError('发布记录中未找到唯一匹配的内核文件')
     digest = matches[0].get('digest') or ''
     if not re.fullmatch(r'sha256:[a-f0-9]{64}', digest):
-        raise ValueError('官方发布记录缺少有效 SHA256，拒绝跳过校验')
+        raise ValueError('发布记录缺少有效 SHA256，拒绝跳过校验')
     actual = hashlib.sha256()
     with Path(asset_path).open('rb') as file:
         for chunk in iter(lambda: file.read(1024 * 1024), b''):

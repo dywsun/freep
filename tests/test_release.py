@@ -22,5 +22,8 @@ class ReleaseTests(unittest.TestCase):
     def test_installer_uses_asset_digest_not_nonexistent_checksum_file(self):
         text=(Path(__file__).resolve().parents[1]/'install.sh').read_text()
         self.assertNotIn('checksums.txt',text)
-        self.assertIn('releases/tags/v$SB_VERSION',text)
-        self.assertIn('scripts/verify-release.py',text)
+        self.assertIn('scripts/install-kernel.sh',text)
+        kernel=(Path(__file__).resolve().parents[1]/'scripts/install-kernel.sh').read_text()
+        self.assertIn('releases/tags/$tag',kernel)
+        self.assertIn('verify-release.py',kernel)
+        self.assertNotIn('checksums.txt',kernel)

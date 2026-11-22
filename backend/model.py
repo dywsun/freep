@@ -45,8 +45,8 @@ def validate(s, reserved=()):
         assert re.fullmatch(r'[A-Za-z0-9_-]{32,128}', u['token']), '订阅令牌无效'
         assert u['token'] not in tokens, '订阅令牌重复'
         tokens.add(u['token'])
-        dt.date.fromisoformat(u['expire'])
-        assert type(u['quota']) in (int, float) and 0 < u['quota'] <= 100000, '额度无效'
+        if u['expire'] is not None: dt.date.fromisoformat(u['expire'])
+        assert u['quota'] is None or (type(u['quota']) in (int, float) and 0 < u['quota'] <= 100000), '额度无效'
         assert isinstance(u['credentials'], dict), '凭据无效'
         for n, c in u['credentials'].items():
             assert n in names, '用户引用不存在的协议'
@@ -64,7 +64,7 @@ def validate(s, reserved=()):
 
 def eligible(u, usage=None):
     now = dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).date()
-    return u['active'] and dt.date.fromisoformat(u['expire']) >= now and (usage or {}).get(u['id'], 0) < u['quota'] * 1024**3
+    return u['active'] and (u['expire'] is None or dt.date.fromisoformat(u['expire']) >= now) and (u['quota'] is None or (usage or {}).get(u['id'], 0) < u['quota'] * 1024**3)
 
 def counter_name(u, protocol):
     return u['id'] + ':' + KINDS[protocol]
@@ -149,24 +149,21 @@ def subscription(s, u, settings, fmt, usage=None):
             if n['type'] == 'tuic': p.update({'alpn': ['h3'], 'congestion-controller': settings.get('tuic_congestion_control','bbr')})
             if n['type'] == 'hysteria2': p['alpn'] = ['h3']
             proxies.append(p)
-        rules = []
-        if s['rules'][0]: rules += ['IP-CIDR,10.0.0.0/8,DIRECT,no-resolve', 'IP-CIDR,172.16.0.0/12,DIRECT,no-resolve', 'IP-CIDR,192.168.0.0/16,DIRECT,no-resolve', 'IP-CIDR,127.0.0.0/8,DIRECT,no-resolve', 'IP-CIDR6,fc00::/7,DIRECT,no-resolve', 'IP-CIDR6,::1/128,DIRECT,no-resolve', 'IP-CIDR6,fe80::/10,DIRECT,no-resolve']
-        if s['rules'][1]: rules += ['GEOSITE,cn,DIRECT']
-        if s['rules'][2]: rules += ['GEOIP,CN,DIRECT']
-        fallback = 'DIRECT' if s['fallback'] == '直连' else s['fallback']
-        rules += ['MATCH,' + fallback]
-        obj = {'mixed-port': 7890, 'allow-lan': False, 'mode': 'rule', 'proxies': proxies, 'proxy-groups': [{'name': '节点选择', 'type': 'select', 'proxies': ['自动选择'] + [n['name'] for n in proxies]}, {'name': '自动选择', 'type': 'url-test', 'proxies': [n['name'] for n in proxies] or ['DIRECT'], 'url': 'https://www.gstatic.com/generate_204', 'interval': 300}], 'rules': rules}
+        obj = {'proxies': proxies}
         # JSON is valid YAML 1.2 and supported by Mihomo's YAML parser.
         return json.dumps(obj, ensure_ascii=False, indent=2).encode(), 'application/yaml; charset=utf-8'
     if fmt == 'singbox':
-        tags = [n['tag'] for n in nodes]
-        route_rules = []
-        if s['rules'][0]: route_rules.append({'ip_is_private': True, 'outbound': 'direct'})
-        sets = []
-        for enabled, tag, url in [(s['rules'][1], 'cn-domain', 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs'), (s['rules'][2], 'cn-ip', 'https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs')]:
-            if enabled:
-                sets.append({'type': 'remote', 'tag': tag, 'format': 'binary', 'url': url, 'download_detour': '节点选择', 'update_interval': '1d' if s['rules'][3] else '87600h'})
-                route_rules.append({'rule_set': tag, 'outbound': 'direct'})
-        obj = {'inbounds': [{'type': 'mixed', 'tag': 'mixed-in', 'listen': '127.0.0.1', 'listen_port': 7890}], 'outbounds': [{'type': 'selector', 'tag': '节点选择', 'outbounds': ['自动选择'] + tags}, {'type': 'urltest', 'tag': '自动选择', 'outbounds': tags or ['direct'], 'url': 'https://www.gstatic.com/generate_204', 'interval': '5m'}] + nodes + [{'type': 'direct', 'tag': 'direct'}], 'route': {'rules': route_rules, 'rule_set': sets, 'final': 'direct' if s['fallback'] == '直连' else s['fallback']}}
+        obj = {'outbounds': nodes}
         return json.dumps(obj, ensure_ascii=False, indent=2).encode(), 'application/json'
     raise ValueError('不支持的订阅格式')
+
+
+def subscription_limits(u, upload=0, download=0):
+    """Omit unlimited fields rather than reporting zero quota or epoch expiry."""
+    expire = None
+    parts = [f'upload={upload}', f'download={download}']
+    if u['quota'] is not None: parts.append(f'total={int(u["quota"] * 1024**3)}')
+    if u['expire'] is not None:
+        expire = int(dt.datetime.combine(dt.date.fromisoformat(u['expire']) + dt.timedelta(days=1), dt.time(), dt.timezone(dt.timedelta(hours=8))).timestamp())
+        parts.append(f'expire={expire}')
+    return expire, '; '.join(parts)
