@@ -41,6 +41,8 @@ def switch(root,directory):
 def install_archive(root,archive,version,api_version):
     if not re.fullmatch('[a-f0-9]{40}',version):raise ValueError('提交编号无效')
     root=Path(root);releases=root/'web-releases';releases.mkdir(mode=0o755,parents=True,exist_ok=True)
+    # The installer uses umask 077; the unprivileged panel must traverse this directory.
+    releases.chmod(0o755)
     with tempfile.TemporaryDirectory(prefix='.stage-',dir=releases) as stage:
         destination=Path(stage);total=0;count=0
         with tarfile.open(archive,'r:gz') as tar:

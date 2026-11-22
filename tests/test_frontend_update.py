@@ -1,6 +1,7 @@
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import sys
 import tarfile
@@ -36,3 +37,14 @@ class FrontendUpdateTests(unittest.TestCase):
             self.archive(archive,malicious=True)
             with self.assertRaises(ValueError):updater.install_archive(root,archive,'c'*40,2)
             self.assertFalse((root/'escape').exists());self.assertEqual(current_frontend(root)[1],'a'*40)
+
+    def test_releases_readable_under_installer_umask(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);archive=root/'bundle.tar.gz';self.archive(archive)
+            previous=os.umask(0o077)
+            try:updater.install_archive(root,archive,'a'*40,2)
+            finally:os.umask(previous)
+            self.assertEqual((root/'web-releases').stat().st_mode & 0o777,0o755)
+            release=current_frontend(root)[0]
+            self.assertEqual(release.stat().st_mode & 0o777,0o755)
+            self.assertEqual((release/'index.html').stat().st_mode & 0o777,0o644)
