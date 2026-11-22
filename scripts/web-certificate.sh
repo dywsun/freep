@@ -11,6 +11,30 @@ Path('/etc/nginx/conf.d/relay.conf').write_text(nginx_config(sys.argv[1],int(sys
 PY
 }
 
+# Nginx reload is asynchronous; the master can acknowledge before new workers serve requests.
+wait_relay_challenge() {
+  local scope="$1" probe="$2" expected="$3" attempt reply status
+  local options=()
+  if [[ $scope == local ]]; then
+    options=(--resolve "$PUBLIC_HOST:80:127.0.0.1")
+  fi
+  for ((attempt=1; attempt<=10; attempt++)); do
+    reply=''
+    if reply="$(curl --silent --ipv4 --noproxy '*' --connect-timeout 3 --max-time 8 ${options[@]+"${options[@]}"} --write-out $'\n%{http_code}' "http://$PUBLIC_HOST/.well-known/acme-challenge/$probe")"; then
+      status="${reply##*$'\n'}"
+      if [[ $status == 200 && ${reply%$'\n'*} == "$expected" ]]; then return 0; fi
+    else
+      status="${reply##*$'\n'}"
+    fi
+    if [[ $attempt -lt 10 ]]; then
+      echo "等待证书验证入口就绪：${scope}，尝试 ${attempt}/10（HTTP ${status:-000}）" >&2
+      sleep 1
+    fi
+  done
+  echo "证书验证入口检查失败：${scope}（HTTP ${status:-000}，或响应内容不匹配）。" >&2
+  return 1
+}
+
 prepare_web_certificate() {
   install -d -m 755 /var/lib/relay-acme /var/lib/relay-acme/.well-known /var/lib/relay-acme/.well-known/acme-challenge
   install -d -m 700 /etc/relay/acme-deploy /etc/relay/acme
@@ -40,12 +64,12 @@ records=socket.getaddrinfo(host,80,type=socket.SOCK_STREAM)
 if not any(r[0]==socket.AF_INET for r in records):raise SystemExit('未解析到 A 记录，请先在 Cloudflare 配置 A 记录并等待生效')
 print('域名解析地址：'+', '.join(sorted({r[4][0] for r in records})))
 PY
-  local probe token reply
+  local probe token
   token="$(openssl rand -hex 24)"
   probe="relay-check-$(openssl rand -hex 8)"
   printf '%s' "$token" > "/var/lib/relay-acme/.well-known/acme-challenge/$probe"
   chmod 644 "/var/lib/relay-acme/.well-known/acme-challenge/$probe"
-  if ! reply="$(curl --fail --silent --show-error --ipv4 --max-time 20 "http://$PUBLIC_HOST/.well-known/acme-challenge/$probe")" || [[ $reply != "$token" ]]; then
+  if ! wait_relay_challenge local "$probe" "$token" || ! wait_relay_challenge public "$probe" "$token"; then
     rm -f "/var/lib/relay-acme/.well-known/acme-challenge/$probe"
     echo '域名验证入口不可达：检查 A 记录、Cloudflare 灰云及公网 TCP 80。未开放管理网站。' >&2
     return 1
