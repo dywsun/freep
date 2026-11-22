@@ -78,11 +78,12 @@ ports=()
 for value in "$VMESS_PORT" "$TUIC_PORT" "$VLESS_PORT" "$HYSTERIA2_PORT" "$ANYTLS_PORT" "$WEB_PORT" "$API_PORT" "$STATS_PORT"; do
   [[ $value =~ ^[0-9]{1,5}$ && $value -ge 1024 && $value -le 65535 ]] || { echo "端口无效：$value"; exit 1; }
   for prior in "${ports[@]:-}"; do [[ $prior != "$value" ]] || { echo "端口重复：$value"; exit 1; }; done
+  [[ $value != 8443 ]] || { echo "8443 is reserved for the subscription origin"; exit 1; }
   ports+=("$value")
   if command -v ss >/dev/null && ss -H -lntu | awk '{print $5}' | grep -Eq ":${value}$"; then echo "端口已占用：$value"; exit 1; fi
 done
-if command -v ss >/dev/null && ss -H -lnt | awk '{print $4}' | grep -Eq ':443$'; then
-  echo '443 端口已占用，无法创建独立订阅 HTTPS 回源入口，请先检查现有服务。'; exit 1
+if command -v ss >/dev/null && ss -H -lnt | awk '{print $4}' | grep -Eq ':8443$'; then
+  echo '8443 端口已占用，无法创建独立订阅 HTTPS 回源入口，请先检查现有服务。'; exit 1
 fi
 if [[ -n $TLS_CERT || -n $TLS_KEY ]]; then
   [[ -f $TLS_CERT && -f $TLS_KEY ]] || { echo 'TLS_CERT/TLS_KEY 必须同时指定有效文件'; exit 1; }

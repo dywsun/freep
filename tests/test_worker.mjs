@@ -6,7 +6,7 @@ import {makeWorker,publicIP,originURL,digest} from '../worker-service/src/worker
 if(!globalThis.crypto)Object.defineProperty(globalThis,'crypto',{value:webcrypto});
 const DB=d1();DB.database.exec(readFileSync(new URL('../worker-service/schema.sql',import.meta.url),'utf8'));
 const calls=[];
-const worker=makeWorker(async(url,options)=>{calls.push([String(url),options]);if(String(url).startsWith('https://cloudflare-dns.com/'))return Response.json({Answer:[{type:1,data:'8.8.8.8'}]});if(String(url).startsWith('https://hk.example.com/'))return new Response('hk-user-nodes',{headers:{'Subscription-Userinfo':'upload=12; download=34','Set-Cookie':'origin-private=secret'}});if(String(url).startsWith('https://jp.example.com/'))return new Response('jp-user-nodes');throw Error('Origin offline')});
+const worker=makeWorker(async(url,options)=>{calls.push([String(url),options]);if(String(url).startsWith('https://cloudflare-dns.com/'))return Response.json({Answer:[{type:1,data:'8.8.8.8'}]});if(String(url).startsWith('https://hk.example.com/'))return new Response('hk-user-nodes',{headers:{'Subscription-Userinfo':'upload=12; download=34','Set-Cookie':'origin-private=secret'}});if(String(url).startsWith('https://jp.example.com:8443/'))return new Response('jp-user-nodes');throw Error('Origin offline')});
 const env={DB};let cookie='',csrf='';
 async function request(path,method='GET',body,extra={}){return worker.fetch(new Request('https://gateway.example.com'+path,{method,headers:{...(method==='POST'?{'Content-Type':'application/json',Origin:'https://gateway.example.com'}:{}),...(cookie?{Cookie:cookie}:{}),...(csrf?{'X-CSRF-Token':csrf}:{}),...extra},body:body===undefined?undefined:JSON.stringify(body)}),env)}
 const original='first-password-12345',next='replacement-password-67890';
@@ -20,19 +20,21 @@ let login=await request('/api/login','POST',{username:'dywsun',password:original
 assert.match(login.headers.get('Set-Cookie'),/Secure; HttpOnly; SameSite=Strict/);
 assert.equal((await request('/api/settings','POST',{registration:true},{'X-CSRF-Token':'bad'})).status,403);
 assert.equal((await request('/api/settings','POST',{registration:true},{Origin:'https://evil.example.com'})).status,403);
+const missing=await request('/api/register','POST',{});assert.equal((await missing.json()).code,'TOKEN_NOT_CONFIGURED');
 const registrationToken='register-token-very-long-123456789';
 assert.equal((await request('/api/settings','POST',{registration:true,token:registrationToken})).status,200);
 let state=await (await request('/api/state')).json();assert.equal(state.tokenConfigured,true);assert.equal(JSON.stringify(state).includes(registrationToken),false);
 const a={id:'5fd3033e-a417-4bd3-b760-bf546793a7be',ip:'8.8.8.8',name:'Hong Kong',origin:'https://hk.example.com/freedom/sub',key:'a'.repeat(64)};
-const b={id:'ccde1187-255f-44cd-8c82-3bbbfaab86ce',ip:'1.1.1.1',name:'Japan',origin:'https://jp.example.com/sub',key:'b'.repeat(64)};
+const b={id:'ccde1187-255f-44cd-8c82-3bbbfaab86ce',ip:'1.1.1.1',name:'Japan',origin:'https://jp.example.com:8443/sub',key:'b'.repeat(64)};
 const reg=p=>request('/api/register','POST',p,{Authorization:'Bearer '+registrationToken});
-assert.equal((await request('/api/register','POST',a)).status,403);
+const mismatch=await request('/api/register','POST',a);assert.equal(mismatch.status,403);assert.equal((await mismatch.json()).code,'TOKEN_MISMATCH');
 assert.equal((await reg(a)).status,200);assert.equal((await reg(b)).status,200);assert.equal((await reg(a)).status,200);
 assert.equal((await reg({...a,key:'c'.repeat(64)})).status,409);
 assert.equal((await reg({...a,ip:'127.0.0.1'})).status,400);
 assert.equal((await request('/api/node/update','POST',{id:b.id,ip:'9.9.9.9'},{Authorization:'Bearer '+a.key})).status,403);
 const token='x'.repeat(43);let result=await request('/sub/'+a.id+'/'+token+'?format=uri');assert.equal(await result.text(),'hk-user-nodes');assert.equal(result.headers.get('Set-Cookie'),null);assert.equal(result.headers.get('Cache-Control'),'no-store');assert.equal(result.headers.get('Subscription-Userinfo'),'upload=12; download=34');
 assert.equal(await (await request('/sub/'+b.id+'/'+token)).text(),'jp-user-nodes');
+assert.ok(calls.some(([url])=>url.startsWith('https://jp.example.com:8443/sub/')));
 assert.ok(calls.some(([url])=>url==='https://hk.example.com/freedom/sub/'+token+'?format=uri'));
 assert.equal((await request('/api/node/action','POST',{id:a.id,action:'disable'})).status,200);assert.equal((await request('/sub/'+a.id+'/'+token)).status,404);assert.equal((await request('/sub/'+b.id+'/'+token)).status,200);
 assert.equal((await request('/api/node/update','POST',{id:a.id},{Authorization:'Bearer '+a.key})).status,200);assert.equal((await request('/sub/'+a.id+'/'+token)).status,404);

@@ -28,7 +28,7 @@ def validate(s, reserved=()):
     assert isinstance(s, dict) and isinstance(s.get('users'), list), '用户列表无效'
     assert len(s['users']) <= 2000, '最多支持 2000 位用户'
     assert len(s.get('protocols', [])) <= 5, '协议列表无效'
-    names, ports = set(), set(reserved)
+    names, ports = set(), set(reserved) | {8443}
     for p in s['protocols']:
         assert p['name'] in KINDS and p['name'] not in names, '每种协议只能配置一个入口'
         assert type(p['port']) is int and 1024 <= p['port'] <= 65535, '协议端口范围为 1024–65535'

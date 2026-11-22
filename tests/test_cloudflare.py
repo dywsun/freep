@@ -51,3 +51,35 @@ class GatewayTests(unittest.TestCase):
         with patch('cloudflare.request',side_effect=ValueError('offline')):
             with self.assertRaises(ValueError):gateway.register({'url':'https://other.example.com','ip':'8.8.8.8','origin':'https://origin.example.com/sub','token':'a'*32})
         self.assertEqual(gateway.config,before)
+    def test_registration_error_preserves_worker_reason(self):
+        import io
+        from urllib.error import HTTPError
+        from cloudflare import request
+        for code in ['REGISTRATION_PAUSED','TOKEN_NOT_CONFIGURED','TOKEN_MISMATCH']:
+            error=HTTPError('https://gateway.example.com/api/register',403,'Forbidden',{'Content-Type':'application/json'},io.BytesIO(json.dumps({'code':code}).encode()))
+            with patch('cloudflare.build_opener') as opener:
+                opener.return_value.open.side_effect=error
+                with self.assertRaises(ValueError) as caught:request('https://gateway.example.com/api/register')
+                self.assertNotIn('HTTP 403',str(caught.exception))
+        error=HTTPError('https://gateway.example.com/api/register',403,'Forbidden',{'Content-Type':'text/html'},io.BytesIO(b'<html>Challenge</html>'))
+        with patch('cloudflare.build_opener') as opener:
+            opener.return_value.open.side_effect=error
+            with self.assertRaisesRegex(ValueError,'Cloudflare WAF'):request('https://gateway.example.com/api/register')
+
+    def test_custom_origin_port_is_preserved(self):
+        self.assertEqual(https_url('https://origin.example.com:8443/freedom/sub'),'https://origin.example.com:8443/freedom/sub')
+        with self.assertRaises(ValueError):https_url('https://gateway.example.com:8443',True)
+        with self.assertRaises(ValueError):https_url('https://origin.example.com:18898/sub')
+    def test_application_user_agent_and_1010_diagnostic(self):
+        import io
+        from urllib.error import HTTPError
+        from cloudflare import request
+        with patch('cloudflare.build_opener') as opener:
+            opener.return_value.open.return_value.__enter__.return_value.read.return_value=b'{"ok":true}'
+            request('https://gateway.example.com/api/bootstrap')
+            sent=opener.return_value.open.call_args.args[0]
+            self.assertEqual(sent.get_header('User-agent'),'Relay-VPS/1.0')
+        error=HTTPError('https://gateway.example.com/api/register',403,'Forbidden',{'Content-Type':'text/plain'},io.BytesIO(b'error code: 1010'))
+        with patch('cloudflare.build_opener') as opener:
+            opener.return_value.open.side_effect=error
+            with self.assertRaisesRegex(ValueError,'Cloudflare 1010'):request('https://gateway.example.com/api/register')

@@ -10,6 +10,7 @@ def validate_path(path):
 
 def nginx_config(host, web_port, api_port, base_path='', challenge_only=False):
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.-]{0,252}', host): raise ValueError('无效域名')
+    if web_port == 8443: raise ValueError('8443 is reserved for subscription origin')
     if base_path: validate_path(base_path)
     for port in (web_port, api_port):
         if type(port) is not int or not 1024 <= port <= 65535: raise ValueError('无效端口')
@@ -48,9 +49,9 @@ def nginx_config(host, web_port, api_port, base_path='', challenge_only=False):
 '''
 
     subscription_origin = f'''server {{
-    listen 443 ssl;
+    listen 8443 ssl;
     error_log /dev/null crit;
-    listen [::]:443 ssl;
+    listen [::]:8443 ssl;
     server_name {host};
     ssl_certificate /etc/relay/web-cert.pem;
     ssl_certificate_key /etc/relay/web-key.pem;

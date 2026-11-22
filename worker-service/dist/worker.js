@@ -8,11 +8,11 @@ function equal(a,b){if(typeof a!=='string'||typeof b!=='string')return false;let
 async function passwordHash(password,salt){const key=await crypto.subtle.importKey('raw',encoder.encode(password),'PBKDF2',false,['deriveBits']);return Array.from(new Uint8Array(await crypto.subtle.deriveBits({name:'PBKDF2',hash:'SHA-256',salt:encoder.encode(salt),iterations:100000},key,256)),b=>b.toString(16).padStart(2,'0')).join('')}
 const security={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'"};
 function response(value,status=200,headers={}){return new Response(typeof value==='string'?value:JSON.stringify(value),{status,headers:{...security,'Content-Type':'application/json; charset=utf-8',...headers}})}
-function fail(message,status=400){throw Object.assign(Error(message),{status})}
+function fail(message,status=400,code){throw Object.assign(Error(message),{status,code})}
 function validPassword(value){if(typeof value!=='string'||value.length<12||value.length>256)fail('密码长度必须为 12–256 个字符')}
 function publicIP(ip){if(isIP(ip)===4){const [a,b]=ip.split('.').map(Number);return !(a===0||a===10||a===127||a>=224||a===169&&b===254||a===172&&b>=16&&b<=31||a===192&&b===168||a===100&&b>=64&&b<=127||a===198&&(b===18||b===19))}if(isIP(ip)===6){const n=ip.toLowerCase();return /^[23][0-9a-f]{0,3}:/.test(n)&&!(/^f[cdfe]/.test(n)||n==='::'||n==='::1'||n.includes('.')||n.startsWith('::ffff:'))}return false}
 function originURL(value){let url;try{url=new URL(value)}catch{fail('回源地址无效')}
- if(url.protocol!=='https:'||(url.port&&url.port!=='443')||url.username||url.password||url.search||url.hash||url.pathname.includes('%')||!/^\/(?:[A-Za-z0-9_-]+\/)*sub\/?$/.test(url.pathname))fail('回源需为 HTTPS 订阅接口，不带查询参数')
+ if(url.protocol!=='https:'||(url.port&&!['443','8443'].includes(url.port))||url.username||url.password||url.search||url.hash||url.pathname.includes('%')||!/^\/(?:[A-Za-z0-9_-]+\/)*sub\/?$/.test(url.pathname))fail('回源需为 HTTPS 订阅接口，不带查询参数')
  if(isIP(url.hostname.replace(/^\[|\]$/g,''))||!/^([a-z0-9][a-z0-9-]*\.)+[a-z]{2,63}$/.test(url.hostname)||/\.(localhost|local|internal|test|invalid)$/.test(url.hostname))fail('回源需使用公网域名及受信任的 HTTPS 证书')
  return url.href.replace(/\/$/,'')}
 async function ensurePublicDNS(origin,fetcher){const host=new URL(origin).hostname;let addresses=[];
@@ -52,7 +52,9 @@ return {async fetch(request,env,ctx){try{
  if(path==='/api/register'&&request.method==='POST'){
    await rate(db,request,'register',20);const p=await bodyJSON(request),settings=await db.prepare('SELECT * FROM settings WHERE id=1').first();
    const token=request.headers.get('Authorization')?.replace(/^Bearer /,'')||'';
-   if(!settings.registration||!settings.token_hash||!equal(await digest(token),settings.token_hash))fail('注册未授权或已暂停',403);
+   if(!settings.registration)fail('Registration is paused',403,'REGISTRATION_PAUSED');
+   if(!settings.token_hash)fail('Registration token has not been saved',403,'TOKEN_NOT_CONFIGURED');
+   if(!equal(await digest(token),settings.token_hash))fail('Registration token does not match',403,'TOKEN_MISMATCH');
    if(!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(p.id)||!publicIP(p.ip)||typeof p.name!=='string'||!p.name.trim()||p.name.length>64||! /^[a-f0-9]{64}$/.test(p.key))fail('UUID、公网 IP、名称或管理密钥无效');
    const origin=originURL(p.origin);if(new URL(origin).hostname===url.hostname)fail('回源不能指向 Worker 自身');await ensurePublicDNS(origin,fetcher);
    const hash=await digest(p.key),old=await db.prepare('SELECT * FROM nodes WHERE id=?').bind(p.id).first();
@@ -92,6 +94,7 @@ return {async fetch(request,env,ctx){try{
  }
  if(path==='/api/settings'){
    if(typeof p.registration!=='boolean')fail('注册设置无效');let hash=null;
+   if(typeof p.token==='string')p.token=p.token.trim();
    if(p.token!==undefined){if(typeof p.token!=='string'||p.token.length<24||p.token.length>256)fail('注册令牌长度必须为 24–256 位');hash=await digest(p.token)}
    if(hash)await db.prepare('UPDATE settings SET registration=?,token_hash=?,token_updated=? WHERE id=1').bind(+p.registration,hash,now()).run();else await db.prepare('UPDATE settings SET registration=? WHERE id=1').bind(+p.registration).run();
    return response(await adminState(db,s));
@@ -102,5 +105,5 @@ return {async fetch(request,env,ctx){try{
    return response(await adminState(db,s));
  }
  return response({error:'Not found'},404);
-}catch(e){return response({error:e.status?e.message:'服务暂不可用，请检查数据库绑定与表结构'},e.status||503)}}};}
+}catch(e){return response({code:e.code,error:e.status?e.message:'服务暂不可用，请检查数据库绑定与表结构'},e.status||503)}}};}
 export default makeWorker();
